@@ -8,9 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 
-	. "github.com/drewwells/sprite_sass/lexer"
-	. "github.com/drewwells/sprite_sass/token"
-	. "github.com/drewwells/spritewell"
+	. "github.com/wellington/wellington/lexer"
+	. "github.com/wellington/wellington/token"
 )
 
 /* Example sprite-map output:
@@ -34,6 +33,13 @@ $sprites: map_merge($sprites,(140: (
   )));
 */
 
+var weAreNeverGettingBackTogether = []byte(`
+@mixin sprite-dimensions($map, $name) {
+  $file: sprite-file($map, $name);
+  height: image-height($file);
+  width: image-width($file);
+}`)
+
 func init() {
 	log.SetFlags(log.Lshortfile | log.Ldate | log.Ltime)
 }
@@ -48,17 +54,14 @@ type Parser struct {
 	Chop                 []Replace
 	Pwd, Input, MainFile string
 	SassDir, BuildDir,
-	GenImgDir string
-	StaticDir           string
-	ProjDir             string
-	ImageDir            string
-	Includes            []string
-	Items               []Item
-	Output              []byte
-	Line                map[int]string
-	LineKeys            []int
-	InlineImgs, Sprites map[string]ImageList
-	Vars                map[string]string
+
+	ProjDir string
+	ImageDir string
+	Includes []string
+	Items    []Item
+	Output   []byte
+	Line     map[int]string
+	LineKeys []int
 }
 
 func NewParser() *Parser {
@@ -71,9 +74,6 @@ func NewParser() *Parser {
 // Parser creates a map of all variables and sprites
 // (created via sprite-map calls).
 func (p *Parser) Start(in io.Reader, pkgdir string) ([]byte, error) {
-	p.Vars = make(map[string]string)
-	p.Sprites = make(map[string]ImageList)
-	p.InlineImgs = make(map[string]ImageList)
 	p.Line = make(map[int]string)
 
 	// Setup paths
@@ -85,15 +85,6 @@ func (p *Parser) Start(in io.Reader, pkgdir string) ([]byte, error) {
 	}
 	if p.SassDir == "" {
 		p.SassDir = pkgdir
-	}
-	if p.StaticDir == "" {
-		p.StaticDir = pkgdir
-	}
-	if p.ImageDir == "" {
-		p.ImageDir = p.StaticDir
-	}
-	if p.GenImgDir == "" {
-		p.GenImgDir = p.BuildDir
 	}
 	buf := bytes.NewBuffer(make([]byte, 0, bytes.MinRead))
 	buf.ReadFrom(in)
@@ -131,13 +122,6 @@ func (p *Parser) Start(in io.Reader, pkgdir string) ([]byte, error) {
 	//   p.Rel(), "\n"))
 
 	// Code that we will never support, ever
-	weAreNeverGettingBackTogether := []byte(`
-@mixin sprite-dimensions($map, $name) {
-  $file: sprite-file($map, $name);
-  height: image-height($file);
-  width: image-width($file);
-}
-`)
 
 	return append(weAreNeverGettingBackTogether, p.Output...), nil
 }
@@ -150,14 +134,20 @@ func (p *Parser) Rel() string {
 // LookupFile translates line positions into line number
 // and file it belongs to
 func (p *Parser) LookupFile(pos int) string {
-	pos = pos - 1
+	// Adjust for shift from preamble
+	shift := bytes.Count(weAreNeverGettingBackTogether, []byte{'\n'})
 	for i, n := range p.LineKeys {
 		if n > pos {
 			if i == 0 {
 				return fmt.Sprintf("%s:%d", p.MainFile, pos+1)
 			}
 			hit := p.LineKeys[i-1]
-			return fmt.Sprintf("%s:%d", p.Line[hit], pos-p.LineKeys[i-1])
+			filename := p.Line[hit]
+			// Catch for mainimport errors
+			if filename == "string" {
+				filename = p.MainFile
+			}
+			return fmt.Sprintf("%s:%d", filename, pos-p.LineKeys[i-1]-shift)
 		}
 	}
 	return "mainfile?" + p.MainFile
@@ -225,60 +215,60 @@ func (p *Parser) LookupFile(pos int) string {
 // 	return pos, nestPos
 // }
 
-func (p *Parser) Parse(items []Item) []byte {
-	var (
-		out []byte
-		eoc int
-	)
-	_ = eoc
-	if len(items) == 0 {
-		return []byte("")
-	}
-	j := 1
-	item := items[0]
-	switch item.Type {
-	case VAR:
-		if items[1].Value != ":" {
-			log.Fatal(": expected after variable declaration")
-		}
-		for j < len(items) && items[j].Type != SEMIC {
-			j++
-		}
-		if items[2].Type != CMDVAR {
-			// Hackery for empty sass maps
-			val := string(p.Parse(items[2:j]))
-			// TODO: $var: $anothervar doesnt work
-			// setting other things like $var: darken(#123, 10%)
-			if val != "()" && val != "" {
-				// fmt.Println("SETTING", item, val)
-				p.Vars[item.String()] = val
-			}
-		} else if items[2].Value == "sprite-map" {
-			// Special parsing of sprite-maps
-			imgs := ImageList{
-				ImageDir:  p.ImageDir,
-				BuildDir:  p.BuildDir,
-				GenImgDir: p.GenImgDir,
-				Vertical:  true,
-			}
-			name := fmt.Sprintf("%s", items[0])
-			glob := fmt.Sprintf("%s", items[4])
-			imgs.Decode(glob)
-			imgs.Combine()
-			p.Sprites[name] = imgs
-			//TODO: Generate filename
-			p.Mark(items[2].Pos,
-				items[j].Pos+len(items[j].Value), imgs.Map(name))
-			_, err := imgs.Export()
-			if err != nil {
-				log.Printf("Failed to save sprite: %s", name)
-				log.Println(err)
-			}
-		}
-	}
+// func (p *Parser) Parse(items []Item) []byte {
+// 	var (
+// 		out []byte
+// 		eoc int
+// 	)
+// 	_ = eoc
+// 	if len(items) == 0 {
+// 		return []byte("")
+// 	}
+// 	j := 1
+// 	item := items[0]
+// 	switch item.Type {
+// 	case VAR:
+// 		if items[1].Value != ":" {
+// 			log.Fatal(": expected after variable declaration")
+// 		}
+// 		for j < len(items) && items[j].Type != SEMIC {
+// 			j++
+// 		}
+// 		if items[2].Type != CMDVAR {
+// 			// Hackery for empty sass maps
+// 			val := string(p.Parse(items[2:j]))
+// 			// TODO: $var: $anothervar doesnt work
+// 			// setting other things like $var: darken(#123, 10%)
+// 			if val != "()" && val != "" {
+// 				// fmt.Println("SETTING", item, val)
+// 				p.Vars[item.String()] = val
+// 			}
+// 		} else if items[2].Value == "sprite-map" {
+// 			fmt.Println("hi")
+// 			// Special parsing of sprite-maps
+// 			imgs := ImageList{
+// 				ImageDir:  p.ImageDir,
+// 				BuildDir:  p.BuildDir,
+// 				GenImgDir: p.GenImgDir,
+// 			}
+// 			name := fmt.Sprintf("%s", items[0])
+// 			glob := fmt.Sprintf("%s", items[4])
+// 			imgs.Decode(glob)
+// 			imgs.Combine()
+// 			p.Sprites[name] = imgs
+// 			//TODO: Generate filename
+// 			//p.Mark(items[2].Pos,
+// 			//	items[j].Pos+len(items[j].Value), imgs.Map(name))
+// 			_, err := imgs.Export()
+// 			if err != nil {
+// 				log.Printf("Failed to save sprite: %s", name)
+// 				log.Println(err)
+// 			}
+// 		}
+// 	}
 
-	return append(out, p.Parse(items[j:])...)
-}
+// 	return append(out, p.Parse(items[j:])...)
+// }
 
 // Import recursively resolves all imports.  It lexes the input
 // adding the tokens to the Parser object.
@@ -337,7 +327,7 @@ func (p *Parser) GetItems(pwd, filename, input string) ([]Item, string, error) {
 				item := lex.Next()
 				pos = item.Pos + len(item.Value)
 				if item.Type != SEMIC {
-					log.Println("@import statement must be followed by ;")
+					log.Println("@import statement must be followed by ;", filename)
 				}
 
 				moreTokens, moreOutput, err := p.GetItems(

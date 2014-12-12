@@ -11,13 +11,22 @@ package context
 import "C"
 import "unsafe"
 
-// goBridge is exported to C for providing a Go function reference that can
-// be executed by C.
-//export goBridge
-func goBridge(cargs UnionSassValue, ptr unsafe.Pointer) UnionSassValue {
+// Cookie is used for passing context information to libsass.  Cookie is
+// passed to custom handlers when libsass executes them through the go bridge.
+type Cookie struct {
+	Sign string
+	Fn   SassCallback
+	Ctx  *Context
+}
+
+// GoBridge is exported to C for linking libsass to Go.  This function adheres
+// to the interface provided by libsass.
+//
+//export GoBridge
+func GoBridge(cargs UnionSassValue, ptr unsafe.Pointer) UnionSassValue {
 	// Recover the Cookie struct passed in
 	ck := *(*Cookie)(ptr)
-	usv := ck.fn(ck.ctx, cargs)
+	usv := ck.Fn(ck.Ctx, cargs)
 	return usv
 }
 

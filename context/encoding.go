@@ -35,17 +35,18 @@ func unmarshal(arg UnionSassValue, v interface{}) error {
 		case bool(C.sass_value_is_null(arg)):
 			f.Set(reflect.ValueOf("<nil>"))
 			return nil
-		case bool(C.sass_value_is_number(arg)):
-			k = reflect.Float64
 		case bool(C.sass_value_is_string(arg)):
 			k = reflect.String
 		case bool(C.sass_value_is_boolean(arg)):
 			k = reflect.Bool
-		case bool(C.sass_value_is_color(arg)):
+		case bool(C.sass_value_is_color(arg)) || (bool(C.sass_value_is_number(arg))):
 			k = reflect.Struct
 		case bool(C.sass_value_is_list(arg)):
 			k = reflect.Slice
 			t = reflect.SliceOf(t)
+		case bool(C.sass_value_is_error(arg)):
+			// This should get implemented as type error
+			k = reflect.String
 		}
 	}
 
@@ -54,16 +55,8 @@ func unmarshal(arg UnionSassValue, v interface{}) error {
 		return errors.New("Unsupported SassValue")
 	case reflect.Invalid:
 		return errors.New("Invalid SASS Value - Taylor Swift")
-	case reflect.Float64:
-		if C.sass_value_is_number(arg) {
-			i := C.sass_number_get_value(arg)
-			vv := float64(i)
-			f.Set(reflect.ValueOf(vv))
-		} else {
-			return throwMisMatchTypeError(arg, "float64")
-		}
 	case reflect.String:
-		if C.sass_value_is_string(arg) {
+		if C.sass_value_is_string(arg) || C.sass_value_is_error(arg) {
 			c := C.sass_string_get_value(arg)
 			gc := C.GoString(c)
 			//drop quotes
@@ -104,9 +97,13 @@ func unmarshal(arg UnionSassValue, v interface{}) error {
 			}
 			f.Set(reflect.ValueOf(col))
 		} else if C.sass_value_is_number(arg) {
+			u, err := getSassNumberUnit(arg)
+			if err != nil {
+				return err
+			}
 			sn := SassNumber{
-				value: float64(C.sass_number_get_value(arg)),
-				unit:  C.GoString(C.sass_number_get_unit(arg)),
+				Value: float64(C.sass_number_get_value(arg)),
+				Unit:  u,
 			}
 			f.Set(reflect.ValueOf(sn))
 
@@ -141,8 +138,8 @@ func Unmarshal(arg UnionSassValue, v ...interface{}) error {
 		return errors.New("Cannot Unmarshal an empty value - Michael Scott")
 	} else if len(v) > 1 {
 		if len(v) < int(C.sass_list_get_length(arg)) { //check for optional arguements that are not passed and pad with nil
-			return errors.New(fmt.Sprintf("Arguments mismatch %d C arguments did not match %d",
-				int(C.sass_list_get_length(arg)), len(v)))
+			return fmt.Errorf("Arguments mismatch %d C arguments did not match %d",
+				int(C.sass_list_get_length(arg)), len(v))
 		}
 		for i := 0; i < int(C.sass_list_get_length(arg)); i++ {
 			err = unmarshal(C.sass_list_get_value(arg, C.size_t(i)), v[i])
@@ -170,6 +167,25 @@ func getKind(v interface{}) reflect.Kind {
 	return f.Kind()
 }
 
+func noSassNumberUnit(arg UnionSassValue) bool {
+	return C.GoString(C.sass_number_get_unit(arg)) == "" || C.GoString(C.sass_number_get_unit(arg)) == "none"
+}
+
+func getSassNumberUnit(arg UnionSassValue) (string, error) {
+	u := C.GoString(C.sass_number_get_unit(arg))
+	err := error(nil)
+
+	if u == "" || u == "none" {
+		err = fmt.Errorf("SassNumber has no units.")
+	}
+
+	if _, ok := sassUnitConversions[u]; !ok {
+		err = fmt.Errorf("SassNumber units %s are unsupported", u)
+	}
+
+	return u, err
+}
+
 func Marshal(v interface{}) (UnionSassValue, error) {
 	return makevalue(v)
 }
@@ -181,17 +197,6 @@ func makevalue(v interface{}) (UnionSassValue, error) {
 	switch f.Kind() {
 	default:
 		return C.sass_make_null(), err
-	case reflect.Float32, reflect.Float64:
-		switch f.Kind() {
-		default:
-			return C.sass_make_number(C.double(0), C.CString("none")), err
-		case reflect.Float32:
-			return C.sass_make_number(C.double(v.(float32)), C.CString("none")), err
-		case reflect.Float64:
-			return C.sass_make_number(C.double(v.(float64)), C.CString("none")), err
-		}
-	case reflect.Int:
-		return C.sass_make_number(C.double(v.(int)), C.CString("none")), err
 	case reflect.Bool:
 		return C.sass_make_boolean(C.bool(v.(bool))), err
 	case reflect.String:
@@ -199,7 +204,7 @@ func makevalue(v interface{}) (UnionSassValue, error) {
 	case reflect.Struct: //only SassNumber and color.RGBA are supported
 		if reflect.TypeOf(v).String() == "context.SassNumber" {
 			var sn = v.(SassNumber)
-			return C.sass_make_number(C.double(sn.value), C.CString(sn.unit)), err
+			return C.sass_make_number(C.double(sn.Value), C.CString(sn.Unit)), err
 		} else if reflect.TypeOf(v).String() == "color.RGBA" {
 			var sc = v.(color.RGBA)
 			return C.sass_make_color(C.double(sc.R), C.double(sc.G), C.double(sc.B), C.double(sc.A)), err
@@ -224,5 +229,5 @@ func makevalue(v interface{}) (UnionSassValue, error) {
 func throwMisMatchTypeError(arg UnionSassValue, expectedType string) error {
 	var intf interface{}
 	unmarshal(arg, &intf)
-	return fmt.Errorf("SassValue type mismatch.  Sassvalue is type \"%s\" and has value \"%s\" but expected %s", reflect.TypeOf(intf), intf, expectedType)
+	return fmt.Errorf("Sassvalue is type %s and has value %v but expected %s", reflect.TypeOf(intf), intf, expectedType)
 }

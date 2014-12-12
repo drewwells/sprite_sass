@@ -11,7 +11,11 @@ type unsupportedStruct struct {
 	value float64
 }
 
-func testMarshal(t *testing.T, v interface{}) UnionSassValue {
+type TestError interface {
+	Error(...interface{})
+}
+
+func testMarshal(t TestError, v interface{}) UnionSassValue {
 	res, err := Marshal(v)
 	if err != nil {
 		t.Error(err)
@@ -21,30 +25,30 @@ func testMarshal(t *testing.T, v interface{}) UnionSassValue {
 
 func TestUnmarshalNumber(t *testing.T) {
 
-	c := float64(1)
+	c := SassNumber{1.0, "mm"}
 	sv, _ := makevalue(c)
-	var i float64
+	var i SassNumber
 	Unmarshal(sv, &i)
 	if c != i {
-		t.Errorf("got: %f wanted: %f", i, c)
+		t.Errorf("got: %v wanted: %v", i, c)
 	}
 
-	d := 1.5
+	d := SassNumber{1.5, "pt"}
 	dv, _ := makevalue(d)
-	var ed float64
+	var ed SassNumber
 	Unmarshal(dv, &ed)
 	if d != ed {
-		t.Errorf("got: %f wanted: %f", ed, d)
+		t.Errorf("got: %v wanted: %v", ed, d)
 	}
 
-	d = 2
+	d = SassNumber{2.0, "TaylorSwifts"}
 	dv, _ = makevalue(d)
-	var ei int
+	var ei SassNumber
 	err := Unmarshal(dv, &ei)
 	if err == nil {
 		t.Error("No error thrown for invalid type")
 	}
-	if e := "Unsupported SassValue"; e != err.Error() {
+	if e := fmt.Sprintf("SassNumber units %s are unsupported", d.Unit); e != err.Error() {
 		t.Errorf("got:\n%s\nwanted:\n%s\n", err.Error(), e)
 	}
 
@@ -57,6 +61,19 @@ func TestUnmarshalStringValue(t *testing.T) {
 	Unmarshal(input, &s)
 	if e != s {
 		t.Errorf("got: % #v\nwanted: %s", s, e)
+	}
+}
+
+func TestUnmarshalError(t *testing.T) {
+	e := "error message"
+	obj := Error(fmt.Errorf("%s", e))
+	var s string
+	err := Unmarshal(obj, &s)
+	if err != nil {
+		t.Error(err)
+	}
+	if e != s {
+		t.Errorf("got: %s wanted: %s", s, e)
 	}
 }
 
@@ -93,20 +110,20 @@ func TestUnmarshalUnknown(t *testing.T) {
 	// Need a test for non-supported type
 }
 
-func TestMarshalNumber(t *testing.T) {
-	num := float64(24)
-	var num2 float64
+func TestMarshalInvalidUnitSassNumber(t *testing.T) {
+	num := SassNumber{45, "em"}
+	var num2 SassNumber
 	x := testMarshal(t, num)
-	_ = Unmarshal(x, &num2)
+	error := Unmarshal(x, &num2)
 
-	if num2 != num {
-		t.Errorf("got: %v wanted: %v", num2, num)
+	if error.Error() != "SassNumber units em are unsupported" {
+		t.Errorf("got: %s wanted: %s", error.Error(), "SassNumber units em are unsupported")
 	}
 }
 
 func TestMarshalList(t *testing.T) {
-	lst1 := []float64{1, 2, 3, 4}
-	var lst2 []float64
+	lst1 := []SassNumber{SassNumber{1, "px"}, SassNumber{2, "rad"}, SassNumber{3, "grad"}, SassNumber{4, "deg"}}
+	var lst2 []SassNumber
 
 	x := testMarshal(t, lst1)
 	_ = Unmarshal(x, &lst2)
@@ -117,13 +134,13 @@ func TestMarshalList(t *testing.T) {
 
 	for i := range lst1 {
 		if lst1[i] != lst2[i] {
-			t.Errorf("wanted: %f got: %f", lst1[i], lst2[i])
+			t.Errorf("wanted: %v got: %v", lst1[i], lst2[i])
 		}
 	}
 }
 
 func TestMarshalNumberInterface(t *testing.T) {
-	var fl = float64(3)
+	var fl = SassNumber{3, "turn"}
 	var intf interface{}
 
 	x := testMarshal(t, fl)
@@ -147,19 +164,19 @@ func TestMarshalBool(t *testing.T) {
 }
 
 func TestMarshalInterfaceListToMultiVariable(t *testing.T) {
-	var lst = []interface{}{5, "a", true}
-	var i float64
+	var lst = []interface{}{SassNumber{5, "pt"}, "a", true}
+	var i SassNumber
 	var s string
 	var b bool
-	var ir = float64(5)
+	var ir = SassNumber{5, "pt"}
 	var sr = string("a")
 	var br = bool(true)
 
 	lstm := testMarshal(t, lst)
 	_ = Unmarshal(lstm, &i, &s, &b)
 
-	if i != ir {
-		t.Errorf("got: %f wanted: %f", i, ir)
+	if !reflect.DeepEqual(i, ir) {
+		t.Errorf("got: %v wanted: %v", i, ir)
 	}
 	if s != sr {
 		t.Errorf("got: %s wanted: %s", s, sr)
@@ -170,12 +187,12 @@ func TestMarshalInterfaceListToMultiVariable(t *testing.T) {
 }
 
 func TestMarshalInterfaceListToMultiVariablewList(t *testing.T) {
-	var lst = []interface{}{5, "a", true, []string{"a", "b", "c", "d"}}
-	var i float64
+	var lst = []interface{}{SassNumber{5, "pt"}, "a", true, []string{"a", "b", "c", "d"}}
+	var i SassNumber
 	var s string
 	var b bool
 	var sl []string
-	var ir = float64(5)
+	var ir = SassNumber{5, "pt"}
 	var sr = string("a")
 	var br = bool(true)
 	var slr = []string{"a", "b", "c", "d"}
@@ -183,8 +200,8 @@ func TestMarshalInterfaceListToMultiVariablewList(t *testing.T) {
 	lstm := testMarshal(t, lst)
 	_ = Unmarshal(lstm, &i, &s, &b, &sl)
 
-	if i != ir {
-		t.Errorf("got: %f wanted: %f", i, ir)
+	if !reflect.DeepEqual(i, ir) {
+		t.Errorf("got: %v wanted: %v", i, ir)
 	}
 	if s != sr {
 		t.Errorf("got: %s wanted: %s", s, sr)
@@ -198,22 +215,22 @@ func TestMarshalInterfaceListToMultiVariablewList(t *testing.T) {
 }
 
 func TestMarshalInterfaceListSingleVariable(t *testing.T) {
-	var lst = []interface{}{5}
-	var i float64
-	var ir = float64(5)
+	var lst = []interface{}{SassNumber{5, "mm"}}
+	var i SassNumber
+	var ir = SassNumber{5, "mm"}
 
 	lstm := testMarshal(t, lst)
 	_ = Unmarshal(lstm, &i)
 
-	if i != ir {
-		t.Errorf("got: %f wanted: %f", i, ir)
+	if !reflect.DeepEqual(i, ir) {
+		t.Errorf("got: %v wanted: %v", i, ir)
 	}
 }
 
 func TestMarshalSassNumber(t *testing.T) {
 	sn := SassNumber{
-		value: float64(3.5),
-		unit:  "px",
+		Value: float64(3.5),
+		Unit:  "px",
 	}
 	var sne = SassNumber{}
 
@@ -298,21 +315,21 @@ func TestQuotedStringUnmarshal(t *testing.T) {
 }
 
 func TestOptionalParameters(t *testing.T) {
-	var lst = []interface{}{5, "a", true}
-	var i float64
+	var lst = []interface{}{SassNumber{5, "px"}, "a", true}
+	var i SassNumber
 	var s string
 	var b bool
 	var s2 string
 	var i2 float64
-	var ir = float64(5)
+	var ir = SassNumber{5, "px"}
 	var sr = string("a")
 	var br = bool(true)
 
 	lstm := testMarshal(t, lst)
 	_ = Unmarshal(lstm, &i, &s, &b, &s2, &i2)
 
-	if i != ir {
-		t.Errorf("got: %f wanted: %f", i, ir)
+	if !reflect.DeepEqual(i, ir) {
+		t.Errorf("got: %v wanted: %v", i, ir)
 	}
 	if s != sr {
 		t.Errorf("got: %s wanted: %s", s, sr)
@@ -333,20 +350,21 @@ func TestNullUnionSassValue(t *testing.T) {
 	var usv UnionSassValue
 	var inf interface{}
 	err := Unmarshal(usv, &inf)
-
-	if err.Error() != "I can't work with this. arg UnionSassValue must not be nil. - Unmarshaller" {
-		t.Errorf("got: %s wanted 'I can't work with this. arg UnionSassValue must not be nil. - Unmarshaller'", err)
+	e := "I can't work with this. arg UnionSassValue must not be nil. - Unmarshaller"
+	if err.Error() != e {
+		t.Errorf("got: %s wanted: %s", err, e)
 	}
 }
 
 func TestWrongUnmarshalToFloatType(t *testing.T) {
 	s := "Taylor Swift"
-	var ie float64
+	var ie SassNumber
 
 	sm := testMarshal(t, s)
 	err := Unmarshal(sm, &ie)
 
-	if err.Error() != "SassValue type mismatch.  Sassvalue is type \"string\" and has value \"Taylor Swift\" but expected float64" {
-		t.Errorf("Unmarshal mismatch error not thrown. Got %s, wanted \"SassValue type mismatch.  Sassvalue is type \"string\" and has value \"Taylor Swift\" but expected float64\"", err)
+	e := "Sassvalue is type string and has value Taylor Swift but expected color.RGBA or SassNumber"
+	if err.Error() != e {
+		t.Errorf("got: %s wanted: %s", err, e)
 	}
 }

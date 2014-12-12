@@ -3,30 +3,22 @@ box: drewwells/drunken-golang@0.1.0
 build:
   steps:
     - setup-go-workspace
-
     - script:
         name: Populate cache
         code: |
           if test -d "$WERCKER_CACHE_DIR/sprite_path"; then rsync -avz "$WERCKER_CACHE_DIR/sprite_path/" "$GOPATH"; fi
-          export LIB_VER=$(cat libsass/.lib_version)
+          export LIB_VER=$(cat .libsass_version)
           if test -d "$WERCKER_CACHE_DIR/libsass_$LIB_VER"; then rsync -avz "$WERCKER_CACHE_DIR/libsass_$LIB_VER/" "libsass/"; fi
     - script:
         name: build libsass
         code: |
           make deps
-
     # Get dependencies
     - script:
         name: go get
         code: |
           cd $WERCKER_SOURCE_DIR
           go get -v -t ./...
-    # Build the project
-    - script:
-        name: goxc build & package
-        code: |
-          cd $WERCKER_SOURCE_DIR/sprite
-          goxc -tasks='xc archive' -bc 'linux' -arch 'amd64' -d $WERCKER_OUTPUT_DIR -n sprite
     - script:
         name: go test
         code: |
@@ -43,13 +35,18 @@ build:
           scripts/goclean.sh
           Git_BRANCH=$WERCKER_GIT_BRANCH goveralls -coverprofile=profile.cov -service=wercker.com -repotoken $COVERALLS_TOKEN
     - script:
-        name: Package deployment
-
-    - script:
         name: Store cache
         code: |
           rsync -avz --exclude ".hg/" --exclude "sprite_sass/" --exclude ".git/" "$GOPATH/" "$WERCKER_CACHE_DIR/sprite_path"
           rsync -avz "$WERCKER_SOURCE_DIR/libsass/" "$WERCKER_CACHE_DIR/libsass_$LIB_VER/"
+    # Build the project
+    - script:
+        name: goxc build & package
+        code: |
+          cd $WERCKER_SOURCE_DIR/wt
+          cat main.go
+          rm -rf $WERCKER_OUTPUT_DIR/snapshot
+          goxc -tasks='xc archive' -bc 'linux' -arch 'amd64' -d $WERCKER_OUTPUT_DIR -n wt
   after-steps:
     - hipchat-notify@1.0.5:
         token: $HIPCHAT_TOKEN
@@ -61,7 +58,7 @@ deploy:
         name: get version
         code: |
           # create binary
-          export RELEASE_TAG=$(./snapshot/linux_amd64/sprite -version)
+          export RELEASE_TAG=$(./snapshot/linux_amd64/wt -version)
           echo $RELEASE_TAG
     - wercker/github-create-release:
         token: $GITHUB_TOKEN
@@ -70,5 +67,5 @@ deploy:
         #draft: true
     - wercker/github-upload-asset:
         token: $GITHUB_TOKEN
-        file: snapshot/sprite_linux_amd64.tar.gz
+        file: snapshot/wt_linux_amd64.tar.gz
         #filename: sprite

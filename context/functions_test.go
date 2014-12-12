@@ -2,10 +2,13 @@ package context
 
 import (
 	"bytes"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
-	"github.com/drewwells/spritewell"
+	"github.com/wellington/spritewell"
 )
 
 func wrapCallback(sc SassCallback, ch chan UnionSassValue) SassCallback {
@@ -22,7 +25,6 @@ func testSprite(ctx *Context) {
 		ImageDir:  ctx.ImageDir,
 		BuildDir:  ctx.BuildDir,
 		GenImgDir: ctx.GenImgDir,
-		Vertical:  true,
 	}
 	glob := "*.png"
 	err := imgs.Decode(glob)
@@ -42,6 +44,7 @@ func setupCtx(r io.Reader, out io.Writer, cookies ...Cookie) (*Context, UnionSas
 	ctx.IncludePaths = make([]string, 0)
 	ctx.BuildDir = "test/build"
 	ctx.ImageDir = "test/img"
+	ctx.FontDir = "test/font"
 	ctx.GenImgDir = "test/build/img"
 	ctx.Out = ""
 
@@ -53,8 +56,8 @@ func setupCtx(r io.Reader, out io.Writer, cookies ...Cookie) (*Context, UnionSas
 		cs := make([]Cookie, len(cookies))
 		for i, c := range cookies {
 			cs[i] = Cookie{
-				c.sign,
-				wrapCallback(c.fn, cc),
+				c.Sign,
+				wrapCallback(c.Fn, cc),
 				ctx,
 			}
 		}
@@ -77,6 +80,23 @@ func TestFuncImageURL(t *testing.T) {
 	if e := "url('../img/image.png')"; e != path {
 		t.Errorf("got: %s wanted: %s", path, e)
 	}
+
+	// Test sending invalid date to imageURL
+	usv = testMarshal(t, SassNumber{1, "px"})
+	_ = usv
+	errusv := ImageURL(&ctx, usv)
+	var s string
+	merr := Unmarshal(errusv, &s)
+	if merr != nil {
+		t.Error(merr)
+	}
+
+	e := "Sassvalue is type context.SassNumber and has value {1 px} but expected slice"
+
+	if e != s {
+		t.Errorf("got:\n%s\nwanted:\n%s", s, e)
+	}
+
 }
 
 func TestFuncSpriteMap(t *testing.T) {
@@ -86,7 +106,7 @@ func TestFuncSpriteMap(t *testing.T) {
 	ctx.ImageDir = "test/img"
 
 	// Add real arguments when sass lists can be [un]marshalled
-	lst := []interface{}{"*.png", float64(5), float64(0)}
+	lst := []interface{}{"*.png", SassNumber{5, "px"}}
 	usv := testMarshal(t, lst)
 	usv = SpriteMap(ctx, usv)
 	var path string
@@ -128,11 +148,13 @@ func TestFuncSpriteFile(t *testing.T) {
 
 func TestCompileSpriteMap(t *testing.T) {
 	in := bytes.NewBufferString(`
-$aritymap: sprite-map("*.png",1,2); // Optional arguments
+$aritymap: sprite-map("*.png", 0px); // Optional arguments
 $map: sprite-map("*.png"); // One argument
+$paddedmap: sprite-map("*.png", 1px); // One argument
 div {
 width: $map;
 height: $aritymap;
+line-height: $paddedmap;
 }`)
 
 	ctx := NewContext()
@@ -147,11 +169,47 @@ height: $aritymap;
 	}
 	exp := `div {
   width: *.png0;
-  height: *.png1; }
+  height: *.png0;
+  line-height: *.png1; }
 `
 
 	if exp != out.String() {
 		t.Errorf("got:\n%s\nwanted:\n%s", out.String(), exp)
+	}
+}
+
+func TestCompileSpritePaddingMap(t *testing.T) {
+	in := bytes.NewBufferString(`$map: sprite-map("dual/*.png",10px);
+div {
+  content: $map;
+}`)
+
+	ctx := NewContext()
+
+	ctx.ImageDir = "test/img"
+	ctx.BuildDir = "test/build"
+	ctx.GenImgDir = "test/build/img"
+
+	var out bytes.Buffer
+	err := ctx.Compile(in, &out)
+	if err != nil {
+		t.Error(err)
+	}
+	exp := `div {
+  content: dual/*.png10; }
+`
+
+	if exp != out.String() {
+		t.Errorf("got:\n%s\nwanted:\n%s", out.String(), exp)
+	}
+
+	esz := int64(28160)
+	f, err := os.Stat(filepath.Join(ctx.GenImgDir, "testimgdual-ab7eb7.png"))
+
+	if os.IsNotExist(err) {
+		t.Error(err)
+	} else if f.Size() != esz {
+		t.Errorf("got: %d wanted: %d", f.Size(), esz)
 	}
 }
 
@@ -261,4 +319,67 @@ div {
 	if e != out.String() {
 		t.Errorf("got:\n%s\nwanted:\n%s", out.String(), e)
 	}
+}
+
+func ExampleFontURL() {
+	in := bytes.NewBufferString(`
+$path: font-url("arial.eot", true);
+@font-face {
+  src: font-url("arial.eot");
+  src: url("#{$path}");
+}`)
+
+	_, _, err := setupCtx(in, os.Stdout)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	// Output:
+	// @font-face {
+	//   src: url("../font/arial.eot");
+	//   src: url("../font/arial.eot"); }
+}
+
+func ExampleSprite() {
+	in := bytes.NewBufferString(`
+$map: sprite-map("dual/*.png", 10px); // One argument
+div {
+  background: sprite($map, "140");
+}`)
+
+	ctx := NewContext()
+
+	ctx.BuildDir = "test/build"
+	ctx.GenImgDir = "test/build/img"
+	ctx.ImageDir = "test/img"
+	var out bytes.Buffer
+	err := ctx.Compile(in, &out)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	io.Copy(os.Stdout, &out)
+
+	// Output:
+	// div {
+	//   background: url("img/testimgdual-ab7eb7.png") -0px -149px; }
+
+}
+
+func BenchmarkSprite(b *testing.B) {
+	ctx := NewContext()
+	ctx.BuildDir = "test/build"
+	ctx.GenImgDir = "test/build/img"
+	ctx.ImageDir = "test/img"
+	// Add real arguments when sass lists can be [un]marshalled
+	lst := []interface{}{"*.png", SassNumber{5, "px"}}
+	usv := testMarshal(b, lst)
+
+	for i := 0; i < b.N; i++ {
+		usv = SpriteMap(ctx, usv)
+	}
+	// Debug if needed
+	// var s string
+	// Unmarshal(usv, &s)
+	// fmt.Println(s)
 }

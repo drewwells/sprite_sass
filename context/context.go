@@ -3,45 +3,43 @@ package context
 // #include <stdlib.h>
 // #include "sass_context.h"
 //
-// extern union Sass_Value* goBridge( union Sass_Value* s_args, void* cookie);
+// extern union Sass_Value* GoBridge( union Sass_Value* s_args, void* cookie);
 // union Sass_Value* CallSassFunction( union Sass_Value* s_args, void* cookie ) {
-//     return goBridge(s_args, cookie);
+//     return GoBridge(s_args, cookie);
 // }
 import "C"
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"path/filepath"
 	"reflect"
 
-	"github.com/drewwells/spritewell"
+	"github.com/wellington/spritewell"
 
 	"unsafe"
 )
-
-// Cookie is used for passing context information to libsass.  Cookie is
-// passed to custom handlers when libsass executes them through the go bridge.
-type Cookie struct {
-	sign string
-	fn   SassCallback
-	ctx  *Context
-}
 
 // Context handles the interactions with libsass.  Context
 // exposes libsass options that are available.
 type Context struct {
 	//Parser                        Parser
-	OutputStyle                   int
-	Precision                     int
-	Comments                      bool
-	IncludePaths                  []string
-	BuildDir, ImageDir, GenImgDir string
-	In, Src, Out, Map, MainFile   string
-	Status                        int
-	errorString                   string
-	errors                        lErrors
+	OutputStyle  int
+	Precision    int
+	Comments     bool
+	IncludePaths []string
+
+	// Input directories
+	FontDir, ImageDir string
+	// Output/build directories
+	BuildDir, GenImgDir string
+
+	In, Src, Out, Map, MainFile string
+	Status                      int
+	errorString                 string
+	errors                      lErrors
 
 	in     io.Reader
 	out    io.Writer
@@ -52,6 +50,8 @@ type Context struct {
 
 	// Used for callbacks to retrieve sprite information, etc.
 	Imgs, Sprites spritewell.SafeImageMap
+	// Special variable for debugging bad parsing
+	// debug []byte
 }
 
 // Constants/enums for the output style.
@@ -110,7 +110,7 @@ func (ctx *Context) Init(dc *C.struct_Sass_Data_Context) *C.struct_Sass_Options 
 	}
 	for i, h := range ctx.Cookies {
 		cookies[i+len(handlers)] = Cookie{
-			h.sign, h.fn, ctx,
+			h.Sign, h.Fn, ctx,
 		}
 	}
 	ctx.Cookies = cookies
@@ -126,14 +126,14 @@ func (ctx *Context) Init(dc *C.struct_Sass_Data_Context) *C.struct_Sass_Options 
 	}
 	gofns := *(*[]C.Sass_C_Function_Callback)(unsafe.Pointer(&hdr))
 	for i, v := range ctx.Cookies {
-		signatures[i] = ctx.Cookies[i].sign
+		signatures[i] = ctx.Cookies[i].Sign
 		_ = v
 		cg := C.CString(signatures[i])
 		_ = cg
 
 		fn := C.sass_make_function(
 			// sass signature
-			C.CString(v.sign),
+			C.CString(v.Sign),
 			// C bridge
 			C.Sass_C_Function(C.CallSassFunction),
 			// Only pass reference to global array, so
@@ -154,6 +154,8 @@ func (ctx *Context) Init(dc *C.struct_Sass_Data_Context) *C.struct_Sass_Options 
 func (ctx *Context) Compile(in io.Reader, out io.Writer) error {
 
 	bs, err := ioutil.ReadAll(in)
+
+	// ctx.debug = bs
 	if err != nil {
 		return err
 	}
@@ -184,15 +186,16 @@ func (ctx *Context) Compile(in io.Reader, out io.Writer) error {
 	io.WriteString(out, cout)
 
 	ctx.Status = int(C.sass_context_get_error_status(cc))
-	errJson := C.sass_context_get_error_json(cc)
-	errS, err := ctx.ProcessSassError([]byte(C.GoString(errJson)))
+	errJSON := C.sass_context_get_error_json(cc)
+	err = ctx.ProcessSassError([]byte(C.GoString(errJSON)))
 
 	if err != nil {
 		return err
 	}
 
-	if errS != "" {
-		return errors.New(errS)
+	if ctx.Error() != "" {
+		// TODO: this is weird, make something more idiomatic
+		return fmt.Errorf(ctx.Error())
 	}
 
 	return nil
